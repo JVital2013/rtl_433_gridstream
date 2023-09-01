@@ -190,8 +190,8 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                             /* clang-format off */
                             data = data_make(
                                     "model",        "", DATA_STRING, "LandisGyr GridStream",
-                                    "subtype"       "", DATA_INT,    b[3],
                                     "id",           "", DATA_STRING, srcaddress_str,
+                                    "subtype"       "", DATA_INT,    b[3],
                                     "destaddress",  "", DATA_STRING, destaddress_str,
                                     "mic",          "", DATA_STRING, "CRC", // CRC, CHECKSUM, or PARITY
                                     NULL);
