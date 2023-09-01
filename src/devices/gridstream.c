@@ -118,7 +118,7 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                         break;
                     case 0xD2:
                         stream_len = b[4];
-                        if ((decoded_len - 6) < stream_len) {
+                        if ((decoded_len - 5) < stream_len) {
                             return DECODE_ABORT_LENGTH;
                         }
                         crc = ( b[3 + stream_len] << 8 ) | b[4 + stream_len];
