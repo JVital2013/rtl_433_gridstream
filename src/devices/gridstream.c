@@ -97,7 +97,7 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                         if (!crc_ok) {
                             decoder_log(decoder,1,__func__,"Bad CRC or unknown init value. ");
                             if (stream_len == 0x23) {
-                                decoder_log_bitrow(decoder,1,__func__,b,decoded_len*8, "Use RevEng to find init value.");
+                                decoder_log_bitrow(decoder,1,__func__,&b[6],decoded_len*8, "Use RevEng to find init value.");
                             }
                             return DECODE_FAIL_MIC;
                         }
@@ -189,7 +189,7 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                                     "mic",          "", DATA_STRING, "CRC", // CRC, CHECKSUM, or PARITY
                                     NULL);
                             /* clang-format on */
-                            
+
                         } else
                         {
 
