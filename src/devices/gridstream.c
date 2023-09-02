@@ -69,6 +69,7 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     uint32_t uptime;
     time_t clock;
     char clock_str[80];
+    int subtype;
     unsigned offset = bitbuffer_search(bitbuffer, 0, 0, preamble, 24) + 16;
     /* TODO: Special handling for V4 and V5 syncwords as V5 is not compatible with extract_bytes_uart() */
     int decoded_len = extract_bytes_uart(bitbuffer->bb[0],offset,bitbuffer->bits_per_row[0]-offset,b);
@@ -76,7 +77,8 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     if (decoded_len >= 5) {
         switch(b[2]) {
             case 0x2A:
-                switch (b[3]) {
+                subtype = b[3];
+                switch (subtype) {
                     case 0x55:
                         stream_len = (b[4] << 8) | b[5];
                         if ((decoded_len - 6) < stream_len) {
@@ -107,7 +109,7 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                         data = data_make(
                                 "model",      "", DATA_STRING,  "LandisGyr GridStream",
                                 "id",         "", DATA_STRING,  srcaddress_str,
-                                "subtype"       "", DATA_INT,   b[3],
+                                "subtype",       "", DATA_INT,   subtype,
                                 "wanaddress", "", DATA_STRING,  srcwanaddress_str,
                                 "destaddress", "", DATA_STRING, destwanaddress_str,
                                 "uptime",     "", DATA_INT,     uptime,
@@ -138,8 +140,8 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                         /* clang-format off */
                         data = data_make(
                                 "model",      "", DATA_STRING, "LandisGyr GridStream",
-                                "id",         "", DATA_INT,    0,
-                                "subtype"       "", DATA_INT,    b[3],
+                                "id",         "", DATA_STRING,    "n/a",
+                                "subtype",       "", DATA_INT,    subtype,
                                 "mic",        "", DATA_STRING, "CRC", // CRC, CHECKSUM, or PARITY
                                 NULL);
                         /* clang-format on */
@@ -175,7 +177,7 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                             data = data_make(
                                     "model",        "", DATA_STRING, "LandisGyr GridStream",
                                     "id",           "", DATA_STRING, srcaddress_str,
-                                    "subtype"       "", DATA_INT,    b[3],
+                                    "subtype",       "", DATA_INT,    subtype,
                                     "destaddress",  "", DATA_STRING, destaddress_str,
                                     "timestamp",    "", DATA_STRING, clock_str,
                                     "uptime",       "", DATA_INT,    uptime,
@@ -191,7 +193,7 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                             data = data_make(
                                     "model",        "", DATA_STRING, "LandisGyr GridStream",
                                     "id",           "", DATA_STRING, srcaddress_str,
-                                    "subtype"       "", DATA_INT,    b[3],
+                                    "subtype",       "", DATA_INT,    subtype,
                                     "destaddress",  "", DATA_STRING, destaddress_str,
                                     "mic",          "", DATA_STRING, "CRC", // CRC, CHECKSUM, or PARITY
                                     NULL);
