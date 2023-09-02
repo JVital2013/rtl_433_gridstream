@@ -95,8 +95,10 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                         }
                         while ( crc_count < (sizeof(known_crc_init)/2) && crc_ok == false );
                         if (!crc_ok) {
-                            decoder_log(decoder,1,__func__,"Either bad CRC or unknown init value. Use RevEng to find init value.");
-                            decoder_log_bitrow(decoder,1,__func__,b,decoded_len*8, "");
+                            decoder_log(decoder,1,__func__,"Bad CRC or unknown init value. ");
+                            if (stream_len == 0x23) {
+                                decoder_log_bitrow(decoder,1,__func__,b,decoded_len*8, "Use RevEng to find init value.");
+                            }
                             return DECODE_FAIL_MIC;
                         }
 
@@ -107,13 +109,13 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 
                         /* clang-format off */
                         data = data_make(
-                                "model",      "", DATA_STRING,  "LandisGyr GridStream",
-                                "id",         "", DATA_STRING,  srcaddress_str,
-                                "subtype",       "", DATA_INT,   subtype,
-                                "wanaddress", "", DATA_STRING,  srcwanaddress_str,
-                                "destaddress", "", DATA_STRING, destwanaddress_str,
-                                "uptime",     "", DATA_INT,     uptime,
-                                "mic",        "", DATA_STRING,  "CRC", // CRC, CHECKSUM, or PARITY
+                                "model",       "", DATA_STRING,  "LandisGyr GridStream",
+                                "id",          "Source Meter ID", DATA_STRING,  srcaddress_str,
+                                "subtype",     "", DATA_INT,     subtype,
+                                "wanaddress",  "", DATA_STRING,  srcwanaddress_str,
+                                "destaddress", "", DATA_STRING,  destwanaddress_str,
+                                "uptime",      "", DATA_INT,     uptime,
+                                "mic",         "Integrity", DATA_STRING,  "CRC", // CRC, CHECKSUM, or PARITY
                                 NULL);
                         /* clang-format on */
 
@@ -134,6 +136,7 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                         }
                         while ( crc_count < (sizeof(known_crc_init)/2) && crc_ok == false );
                         if (!crc_ok) {
+                            decoder_log(decoder,1,__func__,"Bad CRC or unknown init value. ");
                             return DECODE_FAIL_MIC;
                         }
 
@@ -141,8 +144,8 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                         data = data_make(
                                 "model",      "", DATA_STRING, "LandisGyr GridStream",
                                 "id",         "", DATA_STRING,    "n/a",
-                                "subtype",       "", DATA_INT,    subtype,
-                                "mic",        "", DATA_STRING, "CRC", // CRC, CHECKSUM, or PARITY
+                                "subtype",    "", DATA_INT,    subtype,
+                                "mic",        "Integrity", DATA_STRING, "CRC", // CRC, CHECKSUM, or PARITY
                                 NULL);
                         /* clang-format on */
 
@@ -163,6 +166,7 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                         }
                         while ( crc_count < (sizeof(known_crc_init)/2) && crc_ok == false );
                         if (!crc_ok) {
+                            decoder_log(decoder,1,__func__,"Bad CRC or unknown init value. ");
                             return DECODE_FAIL_MIC;
                         }
                         sprintf(destaddress_str, "%02x%02x%02x%02x", b[7], b[8], b[9], b[10]);
@@ -176,9 +180,9 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                             /* clang-format off */
                             data = data_make(
                                     "model",        "", DATA_STRING, "LandisGyr GridStream",
-                                    "id",           "", DATA_STRING, srcaddress_str,
-                                    "subtype",       "", DATA_INT,    subtype,
-                                    "destaddress",  "", DATA_STRING, destaddress_str,
+                                    "id",           "Source Meter ID", DATA_STRING, srcaddress_str,
+                                    "subtype",      "", DATA_INT,    subtype,
+                                    "destaddress",  "Target Meter ID", DATA_STRING, destaddress_str,
                                     "timestamp",    "", DATA_STRING, clock_str,
                                     "uptime",       "", DATA_INT,    uptime,
                                     "wanaddress",   "", DATA_STRING, srcwanaddress_str,
@@ -192,10 +196,10 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                             /* clang-format off */
                             data = data_make(
                                     "model",        "", DATA_STRING, "LandisGyr GridStream",
-                                    "id",           "", DATA_STRING, srcaddress_str,
-                                    "subtype",       "", DATA_INT,    subtype,
-                                    "destaddress",  "", DATA_STRING, destaddress_str,
-                                    "mic",          "", DATA_STRING, "CRC", // CRC, CHECKSUM, or PARITY
+                                    "id",           "Source Meter ID", DATA_STRING, srcaddress_str,
+                                    "subtype",      "", DATA_INT,    subtype,
+                                    "destaddress",  "Target Meter ID", DATA_STRING, destaddress_str,
+                                    "mic",          "Integrity", DATA_STRING, "CRC", // CRC, CHECKSUM, or PARITY
                                     NULL);
                             /* clang-format on */
                         }
@@ -209,6 +213,9 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 
         decoder_output_data(decoder, data);
 
+        if (decoder->verbose >= 2) {
+            decoder_log_bitrow(decoder,2,__func__,b,decoded_len*8, "frame data");
+        }
         // Return 1 if message successfully decoded
         return 1;
     }
