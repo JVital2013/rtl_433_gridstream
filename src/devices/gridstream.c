@@ -180,7 +180,7 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                                 "wanaddress",   "",                 DATA_STRING,    srcwanaddress_str,
                                 "destaddress",  "",                 DATA_STRING,    destwanaddress_str,
                                 "uptime",       "",                 DATA_INT,       uptime,
-                                "protversion",  "",                 DATA_INT,       protocol_version,
+                                "protoversion",  "",                 DATA_INT,       protocol_version,
                                 "mic",          "Integrity",        DATA_STRING,    "CRC",
                                 NULL);
                 /* clang-format on */
