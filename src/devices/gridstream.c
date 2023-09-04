@@ -205,7 +205,7 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
                 break;
             case 0xD5:
                 sprintf(destaddress_str, "%02x%02x%02x%02x", b[5], b[6], b[7], b[8]);
-                sprintf(srcaddress_str, "%02x%02x%02x%02x", b[24], b[25], b[26], b[27]);
+                sprintf(srcaddress_str, "%02x%02x%02x%02x", b[9], b[10], b[11], b[12]);
                 if (stream_len == 0x47) {
                     clock  = ((uint32_t)b[14] << 24) | (b[15] << 16) | (b[16] << 8) | b[17];
                     uptime = ((uint32_t)b[22] << 24) | (b[23] << 16) | (b[24] << 8) | b[25];
