@@ -1,7 +1,7 @@
 /** @file
     Decoder for Gridstream RF devices produced by Landis & Gyr.
 
-    Copyright (C) 2016 Benjamin Larsson
+    Copyright (C) 2023 krvmk
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -13,15 +13,18 @@
 Landis & Gyr Gridstream Power Meters.
 
 - Center Frequency: 915 Mhz
-- Modulation: FSK-PCM
+- Frequency Range: 902-928 MHz
+- Channel Spacing: 100kHz, 300kHz
+- Modulation: FSK-PCM (2-FSK, GFSK)
 - Bitrates: 9600, 19200, 38400
 - Preamble: 0xAAAA
 - Syncword v4: 0b0000000001 0b0111111111
 - Syncword v5: 0b0000000001 0b11111111111
 
+This decoder is based on the information from: https://wiki.recessim.com/view/Landis%2BGyr_GridStream_Protocol
 Datastream is variable length and bitrate depending on type fields
 Preamble
-Bytes after preamble are encoded with 8N1
+Bytes after preamble are encoded with standard uart settings with start bit, 8 data bits and stop bit.
 Data layouts:
     Subtype 55:
         AAAAAA SSSS TT YY LLLL KK BBBBBBBBBB WWWWWWWWWW II MMMMMMMM KKKK EEEEEEEE KKKK KKKKKK CCCC KKKK XXXX KK
@@ -50,30 +53,67 @@ Data layouts:
 #include <stdlib.h>
 #include <time.h>
 
-static uint16_t known_crc_init[] = {
-        0xe623,
-        0x5fd6,
-        0xD553,
-        0x45F8,
-        0x62C1,
-        0x23D1,
-        0x2C22,
-        0x142A,
+struct crc_init {
+    uint16_t value;
+    char const *location;
+    char const *provider;
 };
+static struct crc_init known_crc_init[] = {
+        {0xe623, "Kansas City, MO", "Evergy-Missouri West"},
+        {0x5fd6, "Dallas, TX", "Oncor"},
+        {0xD553, "Austin, TX", "Austin Energy"},
+        {0x45F8, "Dallas, TX", "CoServ"},
+        {0x62C1, "Quebec, CAN", "Hydro-Quebec"},
+        {0x23D1, "Seattle, WA", "Seattle City Light"},
+        {0x2C22, "Santa Barbara, CA", "Southern California Edison"},
+        {0x142A, "Washington", "Puget Sound Energy"}};
+
+static int gridstream_checksum(int fulllength, uint16_t length, uint8_t *bits, int adjust)
+{
+    uint16_t crc_count = 0;
+    bool crc_ok        = false;
+    uint16_t crc;
+
+    if ((fulllength - 4 + adjust) < length) {
+        return DECODE_ABORT_LENGTH;
+    }
+    crc = (bits[2 + length + adjust] << 8) | bits[3 + length + adjust];
+    do {
+        if (crc16(&bits[4 + adjust], length - 2, 0x1021, known_crc_init[crc_count].value) == crc) {
+            crc_ok = true;
+        }
+        else {
+            crc_count++;
+        }
+    } while (crc_count < (sizeof(known_crc_init) / sizeof(struct crc_init)) && crc_ok == false);
+    if (!crc_ok) {
+        return DECODE_FAIL_MIC;
+    }
+    else {
+        return crc_count;
+    }
+}
 
 static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 {
     data_t *data;
-    uint8_t const preamble[] = {
+    uint8_t const preambleV4[] = {
             0xAA,
             0xAA,
             0x00,
+            0x5F,
+            0xF0,
+    };
+    uint8_t const preambleV5[] = {
+            0xAA,
+            0xAA,
+            0x00,
+            0x7F,
+            0xF8,
     };
     uint8_t b[BITBUF_COLS];
     uint16_t stream_len;
-    uint16_t crc;
-    uint16_t crc_count = 0;
-    bool crc_ok        = false;
+    char found_crc[5] = "";
     char destwanaddress_str[13];
     char srcwanaddress_str[13];
     char srcaddress_str[9];
@@ -82,120 +122,110 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     time_t clock;
     char clock_str[80];
     int subtype;
-    unsigned offset = bitbuffer_search(bitbuffer, 0, 0, preamble, 24) + 16;
-    /* TODO: Special handling for V4 and V5 syncwords as V5 is not compatible with extract_bytes_uart() */
-    int decoded_len = extract_bytes_uart(bitbuffer->bb[0], offset, bitbuffer->bits_per_row[0] - offset, b);
-
+    unsigned offset;
+    int protocol_version;
+    int subtype_mod = 0;
+    int crcidx;
+    int decoded_len;
+    offset = bitbuffer_search(bitbuffer, 0, 0, preambleV4, 36);
+    if (offset >= bitbuffer->bits_per_row[0]) {
+        offset = bitbuffer_search(bitbuffer, 0, 0, preambleV5, 37);
+        if (offset >= bitbuffer->bits_per_row[0]) {
+            return DECODE_FAIL_SANITY;
+        }
+        else {
+            decoded_len = extract_bytes_uart(bitbuffer->bb[0], offset + 37, bitbuffer->bits_per_row[0] - offset - 37, b);
+            protocol_version = 5;
+        }
+    }
+    else {
+        decoded_len = extract_bytes_uart(bitbuffer->bb[0], offset + 36, bitbuffer->bits_per_row[0] - offset - 36, b);
+        protocol_version = 4;
+    }    
     if (decoded_len >= 5) {
-        switch (b[2]) {
+        switch (b[0]) {
         case 0x2A:
-            subtype = b[3];
+            subtype = b[1];
+            if (subtype == 0xD2) {
+                stream_len  = b[2];
+                subtype_mod = -1;
+            }
+            else {
+                stream_len = (b[2] << 8) | b[3];
+            }
+            crcidx = gridstream_checksum(decoded_len, stream_len, b, subtype_mod);
+            if (crcidx < 0) {
+                decoder_log(decoder, 1, __func__, "Bad CRC or unknown init value. ");
+                if ((stream_len == 0x23) && (subtype = 0xAA)) {
+                    decoder_log_bitrow(decoder, 1, __func__, &b[4], decoded_len * 8, "Use RevEng to find init value.");
+                }
+                return DECODE_FAIL_MIC;
+            }
+            sprintf(found_crc, "%04x", known_crc_init[crcidx].value);
             switch (subtype) {
             case 0x55:
-                stream_len = (b[4] << 8) | b[5];
-                if ((decoded_len - 6) < stream_len) {
-                    return DECODE_ABORT_LENGTH;
-                }
-                crc = (b[4 + stream_len] << 8) | b[5 + stream_len];
-                do {
-                    if (crc16(&b[6], stream_len - 2, 0x1021, known_crc_init[crc_count]) == crc) {
-                        crc_ok = true;
-                    }
-                    else {
-                        crc_count++;
-                    }
-                } while (crc_count < (sizeof(known_crc_init) / 2) && crc_ok == false);
-                if (!crc_ok) {
-                    decoder_log(decoder, 1, __func__, "Bad CRC or unknown init value. ");
-                    if (stream_len == 0x23) {
-                        decoder_log_bitrow(decoder, 1, __func__, &b[6], decoded_len * 8, "Use RevEng to find init value.");
-                    }
-                    return DECODE_FAIL_MIC;
-                }
-
-                sprintf(destwanaddress_str, "%02x%02x%02x%02x%02x%02x", b[7], b[8], b[9], b[10], b[11], b[12]);
-                sprintf(srcwanaddress_str, "%02x%02x%02x%02x%02x%02x", b[13], b[14], b[15], b[16], b[17], b[18]);
-                sprintf(srcaddress_str, "%02x%02x%02x%02x", b[26], b[27], b[28], b[29]);
-                uptime = ((uint32_t)b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23];
+                sprintf(destwanaddress_str, "%02x%02x%02x%02x%02x%02x", b[5], b[6], b[7], b[8], b[9], b[10]);
+                sprintf(srcwanaddress_str, "%02x%02x%02x%02x%02x%02x", b[11], b[12], b[13], b[14], b[15], b[16]);
+                sprintf(srcaddress_str, "%02x%02x%02x%02x", b[24], b[25], b[26], b[27]);
+                uptime = ((uint32_t)b[18] << 24) | (b[19] << 16) | (b[20] << 8) | b[21];
 
                 /* clang-format off */
                         data = data_make(
-                                "model",       "", DATA_STRING,  "LandisGyr GridStream",
-                                "id",          "Source Meter ID", DATA_STRING,  srcaddress_str,
-                                "subtype",     "", DATA_INT,     subtype,
-                                "wanaddress",  "", DATA_STRING,  srcwanaddress_str,
-                                "destaddress", "", DATA_STRING,  destwanaddress_str,
-                                "uptime",      "", DATA_INT,     uptime,
-                                "mic",         "Integrity", DATA_STRING,  "CRC", // CRC, CHECKSUM, or PARITY
+                                "model",        "",                 DATA_STRING,    "LandisGyr-GS",
+                                "networkID",    "Network ID",       DATA_STRING,    found_crc,
+                                "location",     "Location",         DATA_STRING,    known_crc_init[crcidx].location,
+                                "provider",     "Provider",         DATA_STRING,    known_crc_init[crcidx].provider,
+                                "id",           "Source Meter ID",  DATA_STRING,    srcaddress_str,
+                                "subtype",      "",                 DATA_INT,       subtype,
+                                "wanaddress",   "",                 DATA_STRING,    srcwanaddress_str,
+                                "destaddress",  "",                 DATA_STRING,    destwanaddress_str,
+                                "uptime",       "",                 DATA_INT,       uptime,
+                                "protversion",  "",                 DATA_INT,       protocol_version,
+                                "mic",          "Integrity",        DATA_STRING,    "CRC",
                                 NULL);
                 /* clang-format on */
 
+                decoder_output_data(decoder, data);
                 break;
             case 0xD2:
-                stream_len = b[4];
-                if ((decoded_len - 5) < stream_len) {
-                    return DECODE_ABORT_LENGTH;
-                }
-                crc = (b[3 + stream_len] << 8) | b[4 + stream_len];
-                do {
-                    if (crc16(&b[5], stream_len - 2, 0x1021, known_crc_init[crc_count]) == crc) {
-                        crc_ok = true;
-                    }
-                    else {
-                        crc_count++;
-                    }
-                } while (crc_count < (sizeof(known_crc_init) / 2) && crc_ok == false);
-                if (!crc_ok) {
-                    decoder_log(decoder, 1, __func__, "Bad CRC or unknown init value. ");
-                    return DECODE_FAIL_MIC;
-                }
 
                 /* clang-format off */
                         data = data_make(
-                                "model",      "", DATA_STRING, "LandisGyr GridStream",
-                                "id",         "", DATA_STRING,    "n/a",
-                                "subtype",    "", DATA_INT,    subtype,
-                                "mic",        "Integrity", DATA_STRING, "CRC", // CRC, CHECKSUM, or PARITY
+                                "model",        "",             DATA_STRING, "LandisGyr-GS",
+                                "networkID",    "Network ID",   DATA_STRING, found_crc,
+                                "location",     "Location",     DATA_STRING, known_crc_init[crcidx].location,
+                                "provider",     "Provider",     DATA_STRING, known_crc_init[crcidx].provider,
+                                "subtype",      "",             DATA_INT,    subtype,
+                                "protoversion", "",             DATA_INT,    protocol_version,
+                                "mic",          "Integrity",    DATA_STRING, "CRC",
                                 NULL);
                 /* clang-format on */
 
+                decoder_output_data(decoder, data);
                 break;
             case 0xD5:
-                stream_len = (b[4] << 8) | b[5];
-                if ((decoded_len - 6) < stream_len) {
-                    return DECODE_ABORT_LENGTH;
-                }
-                crc = (b[4 + stream_len] << 8) | b[5 + stream_len];
-                do {
-                    if (crc16(&b[6], stream_len - 2, 0x1021, known_crc_init[crc_count]) == crc) {
-                        crc_ok = true;
-                    }
-                    else {
-                        crc_count++;
-                    }
-                } while (crc_count < (sizeof(known_crc_init) / 2) && crc_ok == false);
-                if (!crc_ok) {
-                    decoder_log(decoder, 1, __func__, "Bad CRC or unknown init value. ");
-                    return DECODE_FAIL_MIC;
-                }
-                sprintf(destaddress_str, "%02x%02x%02x%02x", b[7], b[8], b[9], b[10]);
-                sprintf(srcaddress_str, "%02x%02x%02x%02x", b[26], b[27], b[28], b[29]);
+                sprintf(destaddress_str, "%02x%02x%02x%02x", b[5], b[6], b[7], b[8]);
+                sprintf(srcaddress_str, "%02x%02x%02x%02x", b[24], b[25], b[26], b[27]);
                 if (stream_len == 0x47) {
-                    clock  = ((uint32_t)b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19];
-                    uptime = ((uint32_t)b[24] << 24) | (b[25] << 16) | (b[26] << 8) | b[27];
-                    sprintf(srcwanaddress_str, "%02x%02x%02x%02x%02x%02x", b[32], b[33], b[34], b[35], b[36], b[37]);
+                    clock  = ((uint32_t)b[14] << 24) | (b[15] << 16) | (b[16] << 8) | b[17];
+                    uptime = ((uint32_t)b[22] << 24) | (b[23] << 16) | (b[24] << 8) | b[25];
+                    sprintf(srcwanaddress_str, "%02x%02x%02x%02x%02x%02x", b[30], b[31], b[32], b[33], b[34], b[35]);
                     strftime(clock_str, sizeof(clock_str), "%a %Y-%m-%d %H:%M:%S %Z", localtime(&clock));
 
                     /* clang-format off */
                             data = data_make(
-                                    "model",        "", DATA_STRING, "LandisGyr GridStream",
-                                    "id",           "Source Meter ID", DATA_STRING, srcaddress_str,
-                                    "subtype",      "", DATA_INT,    subtype,
-                                    "destaddress",  "Target Meter ID", DATA_STRING, destaddress_str,
-                                    "timestamp",    "", DATA_STRING, clock_str,
-                                    "uptime",       "", DATA_INT,    uptime,
-                                    "wanaddress",   "", DATA_STRING, srcwanaddress_str,
-                                    "mic",          "", DATA_STRING, "CRC", // CRC, CHECKSUM, or PARITY
+                                    "model",        "",                 DATA_STRING, "LandisGyr-GS",
+                                    "networkID",    "Network ID",       DATA_STRING, found_crc,
+                                    "location",     "Location",         DATA_STRING, known_crc_init[crcidx].location,
+                                    "provider",     "Provider",         DATA_STRING, known_crc_init[crcidx].provider,
+                                    "id",           "Source Meter ID",  DATA_STRING, srcaddress_str,
+                                    "subtype",      "",                 DATA_INT,    subtype,
+                                    "destaddress",  "Target Meter ID",  DATA_STRING, destaddress_str,
+                                    "timestamp",    "",                 DATA_STRING, clock_str,
+                                    "uptime",       "",                 DATA_INT,    uptime,
+                                    "wanaddress",   "",                 DATA_STRING, srcwanaddress_str,
+                                    "protoversion", "",                 DATA_INT,   protocol_version,
+                                    "mic",          "Integrity",        DATA_STRING, "CRC",
                                     NULL);
                     /* clang-format on */
                 }
@@ -203,14 +233,20 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 
                     /* clang-format off */
                             data = data_make(
-                                    "model",        "", DATA_STRING, "LandisGyr GridStream",
-                                    "id",           "Source Meter ID", DATA_STRING, srcaddress_str,
-                                    "subtype",      "", DATA_INT,    subtype,
-                                    "destaddress",  "Target Meter ID", DATA_STRING, destaddress_str,
-                                    "mic",          "Integrity", DATA_STRING, "CRC", // CRC, CHECKSUM, or PARITY
+                                    "model",        "",                 DATA_STRING, "LandisGyr-GS",
+                                    "networkID",    "Network ID",       DATA_STRING, found_crc,
+                                    "location",     "Location",         DATA_STRING, known_crc_init[crcidx].location,
+                                    "provider",     "Provider",         DATA_STRING, known_crc_init[crcidx].provider,
+                                    "id",           "Source Meter ID",  DATA_STRING, srcaddress_str,
+                                    "subtype",      "",                 DATA_INT,    subtype,
+                                    "destaddress",  "Target Meter ID",  DATA_STRING, destaddress_str,
+                                    "protoversion", "",                 DATA_INT,   protocol_version,
+                                    "mic",          "Integrity",        DATA_STRING, "CRC",
                                     NULL);
                     /* clang-format on */
                 }
+
+                decoder_output_data(decoder, data);
                 break;
             }
             break;
@@ -218,12 +254,7 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
             return DECODE_ABORT_LENGTH;
             break;
         }
-
-        decoder_output_data(decoder, data);
-
-        if (decoder->verbose >= 2) {
-            decoder_log_bitrow(decoder, 2, __func__, b, decoded_len * 8, "frame data");
-        }
+        decoder_log_bitrow(decoder, 0, __func__, b, decoded_len * 8, "Decoded frame data");
         // Return 1 if message successfully decoded
         return 1;
     }
@@ -234,6 +265,9 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 
 static char const *const output_fields[] = {
         "model",
+        "networkID",
+        "location",
+        "provider",
         "id",
         "subtype",
         "wanaddress",
@@ -242,15 +276,39 @@ static char const *const output_fields[] = {
         "srclocation",
         "destlocation",
         "timestamp",
+        "protoversion",
+        "framedata",
         "mic",
         NULL,
 };
 
-r_device const gridstream = {
-        .name        = "Gridstream decoder",
+r_device const gridstream96 = {
+        .name        = "Gridstream decoder 9.6k",
         .modulation  = FSK_PULSE_PCM,
         .short_width = 104,
         .long_width  = 104,
+        .reset_limit = 20000,
+        .decode_fn   = &gridstream_decode,
+        .disabled    = 0,
+        .fields      = output_fields,
+};
+
+r_device const gridstream192 = {
+        .name        = "Gridstream decoder 19.2k",
+        .modulation  = FSK_PULSE_PCM,
+        .short_width = 52,
+        .long_width  = 52,
+        .reset_limit = 20000,
+        .decode_fn   = &gridstream_decode,
+        .disabled    = 0,
+        .fields      = output_fields,
+};
+
+r_device const gridstream384 = {
+        .name        = "Gridstream decoder 38.4k",
+        .modulation  = FSK_PULSE_PCM,
+        .short_width = 22,
+        .long_width  = 22,
         .reset_limit = 20000,
         .decode_fn   = &gridstream_decode,
         .disabled    = 0,

@@ -254,7 +254,9 @@
     DECL(fineoffset_ws90) \
     DECL(thermopro_tx2c) \
     DECL(tfa_303151) \
-    DECL(gridstream) \
+    DECL(gridstream96) \
+    DECL(gridstream192) \
+    DECL(gridstream384) \
     /* Add new decoders here. */
 
 #define DECL(name) extern r_device name;
