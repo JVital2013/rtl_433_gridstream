@@ -141,7 +141,7 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     else {
         decoded_len = extract_bytes_uart(bitbuffer->bb[0], offset + 36, bitbuffer->bits_per_row[0] - offset - 36, b);
         protocol_version = 4;
-    }    
+    }
     if (decoded_len >= 5) {
         switch (b[0]) {
         case 0x2A:
