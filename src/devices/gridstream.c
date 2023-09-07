@@ -111,7 +111,7 @@ static int gridstream_decode(r_device *decoder, bitbuffer_t *bitbuffer)
             0x7F,
             0xF8,
     };
-    uint8_t b[BITBUF_COLS];
+    uint8_t *b = malloc(bitbuffer->bits_per_row[0] / 8);
     uint16_t stream_len;
     char found_crc[5] = "";
     char destwanaddress_str[13];
